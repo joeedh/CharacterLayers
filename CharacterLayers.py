@@ -43,18 +43,26 @@ class GlobalData:
   def __init__(self):
       self.dcache = DepCache()
       self.last_update_key = None
-      self.version = 29
+      self.version = 48
       self.timer = None
       self.onrender = None
       self.onframe = None
+      self.onframepre = None
       self.filepath = bpy.data.filepath
       
 def addonBackup():
+  register = not hasattr(bpy.types.Object, "characterLayers")
+
+  def layersUpdate(self, context):
+    flagUpdate()
+  
   def visUpdate(self, context):
       ob = self.id_data
       
       depends = bpy._characterLayers.dcache.get(ob)
-      print("DEPENDS", depends)
+      print("\n\nDEPENDS", depends)
+      
+      dgraph = bpy.context.evaluated_depsgraph_get()
       
       for dep in depends:
           dst = getob(dep)
@@ -62,139 +70,32 @@ def addonBackup():
           if not dst:
               print("failed to find", dep)
               continue
+
+          eself = ob.evaluated_get(dgraph).characterLayers
+          dob = dst.evaluated_get(dgraph)
           
           cl = dst.characterLayers
           
           ok = False
           for i in range(len(cl.layers)):
-              if cl.layers[i] and self.visibleLayers[i]:
+              if cl.layers[i] and eself.visibleLayers[i]:
                   ok = True
                   break
           
           try:
+              #dob.hide_render = not ok
+              #dob.hide_set(not ok)
+              
               dst.hide_render = not ok
               dst.hide_set(not ok)
           except:
               print("failed to hide " + dst.name_full)
               continue
                       
-          print(dst.name_full, "hidden:", not ok)
+          print("hide " + dst.name_full + ":", not ok)
 
   deflayers = [False for x in range(32)]
   deflayers[0] = True
-  
-  if not hasattr(bpy, "_characterLayers"):
-      bpy._characterLayers = GlobalData()
-
-  bpy._characterLayers.filepath = bpy.data.filepath
-  
-  def onFrame(scene):
-    flagUpdate()
-    
-  def onRender(arg):
-      print("ON RENDER!")
-      
-      #prevent crash in viewport
-      ctx.scene.render.use_lock_interface = True
-      
-      #update visibility
-      vlayer = bpy.context.view_layer
-      for ob in vlayer.objects:
-          cl = ob.characterLayers
-          if cl.isController:
-              visUpdate(cl, bpy.context)
-
-  if bpy._characterLayers.onrender:
-      if bpy._characterLayers.onrender in bpy.app.handlers.render_pre:
-          bpy.app.handlers.render_pre.remove(bpy._characterLayers.onrender)
-  if hasattr(bpy._characterLayers, 'onframe') and bpy._characterLayers.onframe:
-      if bpy._characterLayers.onframe in bpy.app.handlers.frame_change_post:
-          bpy.app.handlers.frame_change_post.remove(bpy._characterLayers.onframe)
-  
-  bpy._characterLayers.onrender = onRender
-  bpy._characterLayers.onframe = onFrame
-  
-  bpy.app.handlers.render_pre.append(onRender)
-  bpy.app.handlers.frame_change_post.append(onFrame)
-  
-  if bpy._characterLayers.version != GlobalData().version:
-      bpy._characterLayers = GlobalData()
-
-  def flagUpdate():
-    bpy._characterLayers.last_update_key = None
-    
-  def updateDepends(ctx=bpy.context):
-      print("updating dependencies for scene")
-      vlayer = ctx.view_layer
-      
-      obs = []
-      for ob in vlayer.objects:
-          cl = ob.characterLayers
-
-          if cl.maskSourceType != "NONE":
-              obs.append(ob)
-              
-              if not cl.scriptRef:
-                  cl.scriptRef = bpy.data.texts["CharacterLayers.py"]
-                  ob["_clScriptRef"] = bpy.data.texts["CharacterLayers.py"]
-      
-      dcache = bpy._characterLayers.dcache
-
-      for ob in obs:
-          dcache.clear(ob)
-      
-      for ob in obs:
-          cl = ob.characterLayers
-          if cl.isController: continue
-          
-          dst = cl.getSourceMaskOb()
-          if not dst: continue
-      
-          print("LINK", obkey(ob), obkey(dst))
-          
-          dcache.link(ob, dst)
-
-      for ob in obs:
-        cl = ob.characterLayers
-        
-        if cl.isController:
-          visUpdate(cl, bpy.context)          
-      
-  def checkUpdateDepends(ctx=bpy.context):
-      key = ctx.scene.name + ":" + bpy.data.filepath
-      vlayer = ctx.view_layer
-      key += ":" + str(len(vlayer.objects))
-      key += ":" + str(ctx.scene.frame_current)
-      
-      if key != bpy._characterLayers.last_update_key:
-          bpy._characterLayers.last_update_key = key
-          
-          print("rebuilding dependency list for character layers");
-          updateDepends(ctx)
-
-  def timer_loop():
-      if timer_loop != bpy._characterLayers.timer:
-          return
-      
-      try:
-        checkUpdateDepends()
-      except:
-        import traceback
-        
-        try:
-          traceback.print_last()
-        except:
-          pass
-          
-        print("error in checkUpdateDepends")
-        
-      return 0.125
-
-  bpy._characterLayers.timer = timer_loop
-  bpy.app.timers.register(timer_loop)
-
-  def layersUpdate(self, context):
-    flagUpdate()
 
   class CharacterLayers (bpy.types.PropertyGroup):
       #used by cloth objects
@@ -232,9 +133,6 @@ def addonBackup():
               return
           
           return ob2
-      
-  bpy.utils.register_class(CharacterLayers)
-  bpy.types.Object.characterLayers = PointerProperty(type=CharacterLayers)
 
   class CharacterLayersPanel(bpy.types.Panel):
       """"""
@@ -262,7 +160,137 @@ def addonBackup():
           else:
               layout.prop(cl, "visibleLayers")
 
-  bpy.utils.register_class(CharacterLayersPanel)
+  print("register:", register)
+  if register:
+      bpy.utils.register_class(CharacterLayers)
+      bpy.types.Object.characterLayers = PointerProperty(type=CharacterLayers)
+      bpy.utils.register_class(CharacterLayersPanel)
+        
+  if not hasattr(bpy, "_characterLayers"):
+      bpy._characterLayers = GlobalData()
+
+  bpy._characterLayers.filepath = bpy.data.filepath
+      
+  def onFrame(scene):
+    print("\n\nOnFramePost!\n\n")
+    flagUpdate()
+    
+    #prevent crash in viewport
+    bpy.context.scene.render.use_lock_interface = True
+    
+    #updateDepends()
+    
+  def onRender(arg):
+      print("\n\nON RENDER!\n\n")
+      
+      #prevent crash in viewport
+      bpy.context.scene.render.use_lock_interface = True
+      
+      updateDepends()
+      
+      #update visibility
+      vlayer = bpy.context.view_layer
+      for ob in vlayer.objects:
+          cl = ob.characterLayers
+          if cl.isController:
+              visUpdate(cl, bpy.context)
+
+  if bpy._characterLayers.onrender:
+      if bpy._characterLayers.onrender in bpy.app.handlers.render_pre:
+          bpy.app.handlers.render_pre.remove(bpy._characterLayers.onrender)
+
+  if hasattr(bpy._characterLayers, 'onframe') and bpy._characterLayers.onframe:
+      if bpy._characterLayers.onframe in bpy.app.handlers.frame_change_post:
+          bpy.app.handlers.frame_change_post.remove(bpy._characterLayers.onframe)
+  
+  #bpy._characterLayers.onrender = onRender
+  bpy._characterLayers.onframe = onFrame
+  
+  #bpy.app.handlers.render_pre.append(onRender)
+  bpy.app.handlers.frame_change_post.append(onFrame)
+    
+  if bpy._characterLayers.version != GlobalData().version:
+      bpy._characterLayers = GlobalData()
+      register = True
+
+  def flagUpdate():
+    bpy._characterLayers.last_update_key = None
+    
+  def updateDepends(ctx=bpy.context):
+      print("updating dependencies for scene")
+      vlayer = ctx.view_layer
+      
+      obs = []
+      for ob in vlayer.objects:
+          cl = ob.characterLayers
+
+          if cl.maskSourceType != "NONE":
+              obs.append(ob)
+              
+              if not cl.scriptRef:
+                  cl.scriptRef = bpy.data.texts["CharacterLayers.py"]
+                  ob["_clScriptRef"] = bpy.data.texts["CharacterLayers.py"]
+      
+      dcache = bpy._characterLayers.dcache
+
+      for ob in obs:
+          dcache.clear(ob)
+      
+      for ob in obs:
+          cl = ob.characterLayers
+          if cl.isController: continue
+          
+          dst = cl.getSourceMaskOb()
+          if not dst: continue
+      
+          #print("LINK", obkey(ob), obkey(dst))
+          
+          dcache.link(ob, dst)
+
+      for ob in vlayer.objects:
+        cl = ob.characterLayers
+        
+        if cl.isController:
+          visUpdate(cl, bpy.context)          
+      
+  def checkUpdateDepends(ctx=bpy.context):
+      key = ctx.scene.name + ":" + bpy.data.filepath
+      vlayer = ctx.view_layer
+      key += ":" + str(len(vlayer.objects))
+      key += ":" + str(ctx.scene.frame_current)
+      
+      if key != bpy._characterLayers.last_update_key:
+          bpy._characterLayers.last_update_key = key
+          
+          print("rebuilding dependency list for character layers");
+          updateDepends(ctx)
+
+  updateDepends()
+  
+  def timer_loop():
+      #return
+      if timer_loop != bpy._characterLayers.timer:
+          return
+      
+      #prevent crash in viewport
+      bpy.context.scene.render.use_lock_interface = True
+      
+      try:
+        checkUpdateDepends()
+      except:
+        import traceback
+        
+        try:
+          traceback.print_last()
+        except:
+          pass
+          
+        print("error in checkUpdateDepends")
+        
+      return 0.125
+
+  bpy._characterLayers.timer = timer_loop
+  bpy.app.timers.register(timer_loop)
 
 try:
     import rig_character_layers
